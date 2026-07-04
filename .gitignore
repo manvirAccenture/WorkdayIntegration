@@ -39,7 +39,6 @@ lerna-debug.log*
 .DS_Store
 Thumbs.db
 
-# Prisma specific
 /backend/prisma/migrations/
 # Optional: if they want to ignore prisma local sqlite db
 # *.db

@@ -314,4 +314,13 @@ export class IntegrationRunService {
       message: `Polled ${workdayEvents.length} global Workday events successfully.`,
     };
   }
+
+  async applyFix(runId: string): Promise<AiAnalysis> {
+    const analysis = await this.aiAnalysisRepo.findByRunId(runId);
+    if (!analysis) {
+      throw new Error(`AI Analysis for run ${runId} not found.`);
+    }
+    return this.aiAnalysisRepo.setApplied(runId, true);
+  }
 }
+

@@ -25,6 +25,7 @@ const RunDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [relaunchLoading, setRelaunchLoading] = useState(false);
   const [relaunchMessage, setRelaunchMessage] = useState<string | null>(null);
+  const [applyFixLoading, setApplyFixLoading] = useState(false);
 
   const fetchRun = async () => {
     if (!runId) return;
@@ -55,6 +56,20 @@ const RunDetailPage: React.FC = () => {
       setRelaunchMessage(`✗ Relaunch failed: ${err.message}`);
     } finally {
       setRelaunchLoading(false);
+    }
+  };
+
+  const handleApplyFix = async () => {
+    if (!runId) return;
+    setApplyFixLoading(true);
+    try {
+      await runsApi.applyFix(runId);
+      const data = await runsApi.getById(runId);
+      setRun(data);
+    } catch (err: any) {
+      alert(`Failed to apply fix: ${err.message}`);
+    } finally {
+      setApplyFixLoading(false);
     }
   };
 
@@ -240,15 +255,26 @@ const RunDetailPage: React.FC = () => {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginTop: '12px' }}>
                 <span
                   style={{
-                    fontSize: '0.78rem',
+                    fontSize: '0.85rem',
+                    fontWeight: 500,
                     color: run.aiAnalysis.applied ? 'var(--accent-emerald)' : 'var(--text-tertiary)',
                   }}
                 >
                   {run.aiAnalysis.applied ? '✓ Fix Applied' : '○ Not Applied'}
                 </span>
+                {!run.aiAnalysis.applied && (
+                  <button
+                    className="btn btn-success btn-sm"
+                    onClick={handleApplyFix}
+                    disabled={applyFixLoading}
+                    style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                  >
+                    {applyFixLoading ? 'Applying...' : 'Apply AI Fix'}
+                  </button>
+                )}
               </div>
             </div>
           </>

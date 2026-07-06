@@ -147,7 +147,7 @@ export class WorkdayService {
       } else {
         console.error('[WorkdayService] SOAP Request failed:', error.message);
       }
-      throw new Error(`SOAP Get_Integration_Events request failed: ${error.message}`);
+      throw new Error(`SOAP Get_Integration_Events request failed: ${this.extractSoapErrorMessage(error)}`);
     }
   }
 
@@ -158,23 +158,27 @@ export class WorkdayService {
 
     const accessToken = await this.getAccessToken(config);
 
-    // Construct Launch integration SOAP request
+    // Determine the type of launch operation based on the integration system ID name
+    const isEib = workdaySystemId.toUpperCase().includes('EIB');
+    const rootElement = isEib ? 'Launch_EIB_Request' : 'Launch_Integration_Event_Request';
+
+    // Construct Launch integration SOAP request for Workday API v47.0
     const soapEnvelope = `
       <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:bsvc="urn:com.workday/bsvc">
          <soapenv:Header/>
          <soapenv:Body>
-            <bsvc:Launch_Integration_Request>
+            <bsvc:${rootElement}>
                <bsvc:Integration_System_Reference>
                   <bsvc:ID bsvc:type="Integration_System_ID">${workdaySystemId}</bsvc:ID>
                </bsvc:Integration_System_Reference>
-            </bsvc:Launch_Integration_Request>
+            </bsvc:${rootElement}>
          </soapenv:Body>
       </soapenv:Envelope>
     `;
 
     try {
       const soapUrl = this.getSoapUrl(config);
-      console.log(`[WorkdayService] Sending Launch_Integration SOAP request to: ${soapUrl}`);
+      console.log(`[WorkdayService] Sending ${rootElement} SOAP request to: ${soapUrl}`);
       const response = await axios.post(
         soapUrl,
         soapEnvelope,
@@ -186,17 +190,27 @@ export class WorkdayService {
         }
       );
 
-      // Parse the resulting background process instance ID
+      // Parse the resulting background process instance ID (handles both bsvc: and wd: namespaces)
       const xmlStr = response.data;
-      const match = xmlStr.match(/<bsvc:Background_Process_Instance_Reference[^>]*>[\s\S]*?<bsvc:ID bsvc:type="Background_Process_Instance_ID">([^<]+)<\/bsvc:ID>/);
+      const match = xmlStr.match(/<[^:]*:Background_Process_Instance_Reference[^>]*>[\s\S]*?<[^:]*:ID [^:]*:type="Background_Process_Instance_ID">([^<]+)<\/[^:]*:ID>/);
       if (match && match[1]) {
         return match[1];
       }
 
+      // Fallback regex if namespace prefixes are completely omitted
+      const fallbackMatch = xmlStr.match(/<Background_Process_Instance_Reference[^>]*>[\s\S]*?<ID type="Background_Process_Instance_ID">([^<]+)<\/ID>/);
+      if (fallbackMatch && fallbackMatch[1]) {
+        return fallbackMatch[1];
+      }
+
       throw new Error('Could not parse Background_Process_Instance_ID from SOAP response');
     } catch (error: any) {
-      console.error('[WorkdayService] Launch Integration failed:', error.message);
-      throw new Error(`Launch Integration failed: ${error.message}`);
+      if (error.response?.data) {
+        console.error('[WorkdayService] Launch Integration failed with response:', error.response.data);
+      } else {
+        console.error('[WorkdayService] Launch Integration failed:', error.message);
+      }
+      throw new Error(`Launch Integration failed: ${this.extractSoapErrorMessage(error)}`);
     }
   }
 
@@ -350,5 +364,20 @@ export class WorkdayService {
         },
       ];
     }
+  }
+
+  private extractSoapErrorMessage(error: any): string {
+    if (error.response?.data) {
+      const xmlStr = error.response.data;
+      const faultMatch = xmlStr.match(/<faultstring>([^<]+)<\/faultstring>/);
+      if (faultMatch && faultMatch[1]) {
+        return faultMatch[1];
+      }
+      const msgMatch = xmlStr.match(/<[^:]*:Message>([^<]+)<\/[^:]*:Message>/);
+      if (msgMatch && msgMatch[1]) {
+        return msgMatch[1];
+      }
+    }
+    return error.message;
   }
 }

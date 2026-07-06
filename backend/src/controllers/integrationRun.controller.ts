@@ -55,5 +55,16 @@ export class IntegrationRunController {
       res.status(500).json({ error: error.message || 'Internal Server Error' });
     }
   };
+
+  applyFix = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { runId } = req.params;
+      const result = await this.runService.applyFix(runId);
+      res.status(200).json(result);
+    } catch (error: any) {
+      console.error('[IntegrationRunController] Error applying fix:', error);
+      res.status(500).json({ error: error.message || 'Internal Server Error' });
+    }
+  };
 }
 export const integrationRunController = new IntegrationRunController();

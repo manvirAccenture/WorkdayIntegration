@@ -52,4 +52,9 @@ export const runsApi = {
     const { data } = await apiClient.post(`/runs/${runId}/relaunch`);
     return data;
   },
+
+  applyFix: async (runId: string): Promise<any> => {
+    const { data } = await apiClient.post(`/runs/${runId}/apply-fix`);
+    return data;
+  },
 };

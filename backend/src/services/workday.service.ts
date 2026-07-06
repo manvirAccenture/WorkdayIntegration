@@ -107,9 +107,6 @@ export class WorkdayService {
          <soapenv:Body>
             <bsvc:Get_Integration_Events_Request>
                <bsvc:Request_Criteria>
-                  <bsvc:Transaction_Log_Criteria_Data>
-                     <bsvc:Initiated_From_Date_Time>${since.toISOString()}</bsvc:Initiated_From_Date_Time>
-                  </bsvc:Transaction_Log_Criteria_Data>
                   ${
                     workdaySystemId
                       ? `
@@ -119,6 +116,7 @@ export class WorkdayService {
                   `
                       : ''
                   }
+                  <bsvc:Sent_After>${since.toISOString()}</bsvc:Sent_After>
                </bsvc:Request_Criteria>
                <bsvc:Response_Filter>
                   <bsvc:Count>20</bsvc:Count>
@@ -144,7 +142,11 @@ export class WorkdayService {
 
       return this.parseSoapResponse(response.data);
     } catch (error: any) {
-      console.error('[WorkdayService] SOAP Request failed:', error.message);
+      if (error.response?.data) {
+        console.error('[WorkdayService] SOAP Request failed with response:', error.response.data);
+      } else {
+        console.error('[WorkdayService] SOAP Request failed:', error.message);
+      }
       throw new Error(`SOAP Get_Integration_Events request failed: ${error.message}`);
     }
   }

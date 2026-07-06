@@ -41,9 +41,13 @@ export class PollerService {
       console.log(`[PollerService] Found ${activeIntegrations.length} active integrations to scan.`);
 
       for (const integration of activeIntegrations) {
-        console.log(`[PollerService] Polling integration: ${integration.name} (${integration.workdaySystemId})...`);
-        const result = await this.runService.pollIntegration(integration.id);
-        console.log(`[PollerService] Poll result for ${integration.name}: ${result.message} (${result.pulledEventsCount} events)`);
+        try {
+          console.log(`[PollerService] Polling integration: ${integration.name} (${integration.workdaySystemId})...`);
+          const result = await this.runService.pollIntegration(integration.id);
+          console.log(`[PollerService] Poll result for ${integration.name}: ${result.message} (${result.pulledEventsCount} events)`);
+        } catch (error: any) {
+          console.error(`[PollerService] Error polling integration ${integration.name} (${integration.workdaySystemId}):`, error.message);
+        }
       }
     } catch (error: any) {
       console.error('[PollerService] Error in background scheduler tick:', error.message);

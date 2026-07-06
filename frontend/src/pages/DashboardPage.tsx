@@ -28,14 +28,24 @@ const DashboardPage: React.FC = () => {
     setError(null);
     try {
       const [intData, runData] = await Promise.all([
-        integrationsApi.list(),
-        runsApi.list(),
+        integrationsApi.list().catch((err) => {
+          console.warn('Failed to fetch integrations:', err);
+          return [];
+        }),
+        runsApi.list().catch((err) => {
+          const backendError = err.response?.data?.error || err.message;
+          if (backendError?.includes('No integration runs')) {
+            return [];
+          }
+          throw err;
+        }),
       ]);
       setIntegrations(intData);
       setRuns(runData);
     } catch (err: any) {
       console.error('[Dashboard] Fetch error:', err);
-      setError(err.message || 'Failed to load dashboard data.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to load dashboard data.');
     } finally {
       setLoading(false);
     }

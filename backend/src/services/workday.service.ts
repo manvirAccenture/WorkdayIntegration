@@ -267,9 +267,13 @@ export class WorkdayService {
 
       const refContent = refMatch[0];
 
-      // 2. Match the Descriptor attribute of the system (the readable name) - case insensitive
-      const descriptorMatch = refContent.match(/Descriptor=["']([^"']+)["']/i);
-      const name = descriptorMatch ? descriptorMatch[1] : 'Unknown Integration';
+      // 2. Match the Integration_System_Name or fallback to Descriptor attribute of the system
+      const nameMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Integration_System_Name>([^<]+)<\//);
+      let name = nameMatch ? nameMatch[1] : 'Unknown Integration';
+      if (name === 'Unknown Integration') {
+        const descriptorMatch = refContent.match(/Descriptor=["']([^"']+)["']/i);
+        if (descriptorMatch) name = descriptorMatch[1];
+      }
 
       // 3. Match the ID with type="Integration_System_ID" or fallback to WID
       const idMatch = refContent.match(/(?:[a-zA-Z0-9_]+:)?type=["']Integration_System_ID["'][^>]*?>([^<]+)<\//)
@@ -295,28 +299,80 @@ export class WorkdayService {
   private parseSoapResponse(xml: string): WorkdayEvent[] {
     const events: WorkdayEvent[] = [];
 
-    // Split XML by events (Background_Process_Instance or similar)
-    const eventBlocks = xml.split(/<(?:[a-zA-Z0-9_]+:)?Integration_Event_Data>/);
+    // Split XML by individual events
+    const eventBlocks = xml.split(/<(?:[a-zA-Z0-9_]+:)?Integration_Event>/);
     eventBlocks.shift(); // Remove content before first block
 
     for (const block of eventBlocks) {
-      const idMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Background_Process_Instance_ID>([^<]+)<\//);
-      const statusMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Status>([^<]+)<\//);
-      const runByMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Initiating_User>([^<]+)<\//);
-      const startedMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Initiated_Date_Time>([^<]+)<\//);
-      const completedMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Completed_Date_Time>([^<]+)<\//);
-      const errorMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Error_Message>([^<]+)<\//);
-      const logsMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?System_Log>([^<]+)<\//);
+      // 1. Extract Background Process Instance ID
+      const idMatch = block.match(/(?:[a-zA-Z0-9_]+:)?type=["']Background_Process_Instance_ID["'][^>]*?>([^<]+)<\//)
+        || block.match(/<(?:[a-zA-Z0-9_]+:)?Background_Process_Instance_ID>([^<]+)<\//);
 
-      // Extract integration system ID for this event
+      // 2. Extract Status
+      const statusMatch = block.match(/(?:[a-zA-Z0-9_]+:)?type=["']Background_Process_Instance_Status_ID["'][^>]*?>([^<]+)<\//)
+        || block.match(/<(?:[a-zA-Z0-9_]+:)?Status>([^<]+)<\//);
+
+      // 3. Extract Initiated DateTime
+      const startedMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Initiated_DateTime>([^<]+)<\//)
+        || block.match(/<(?:[a-zA-Z0-9_]+:)?Initiated_Date_Time>([^<]+)<\//);
+
+      // 4. Extract Completed DateTime
+      const completedMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Completed_DateTime>([^<]+)<\//)
+        || block.match(/<(?:[a-zA-Z0-9_]+:)?Completed_Date_Time>([^<]+)<\//);
+
+      // 5. Extract Initiator (Run By)
+      const runByMatch = block.match(/(?:[a-zA-Z0-9_]+:)?type=["'](?:System_User_ID|WorkdayUserName)["'][^>]*?>([^<]+)<\//)
+        || block.match(/<(?:[a-zA-Z0-9_]+:)?Initiating_User>([^<]+)<\//);
+
+      // 6. Extract System ID
       const systemIdMatch = block.match(/(?:[a-zA-Z0-9_]+:)?type=["']Integration_System_ID["'][^>]*?>([^<]+)<\//)
-        || block.match(/(?:[a-zA-Z0-9_]+:)?type=["']WID["'][^>]*?>([^<]+)<\//)
-        || block.match(/<(?:[a-zA-Z0-9_]+:)?ID[^>]*?(?:Integration_System_ID)[^>]*?>([^<]+)<\//);
+        || block.match(/(?:[a-zA-Z0-9_]+:)?type=["']WID["'][^>]*?>([^<]+)<\//);
       const systemId = systemIdMatch ? systemIdMatch[1] : null;
 
-      // Extract integration name descriptor if present
-      const systemDescriptorMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Integration_System_Reference[^>]*?Descriptor=["']([^"']+)["']/i);
-      const systemName = systemDescriptorMatch ? systemDescriptorMatch[1] : (systemId || 'Unknown Integration');
+      // 7. Extract System Name from Process_Description
+      const systemDescMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Process_Description>([^<]+)<\//);
+      const systemName = systemDescMatch ? systemDescMatch[1] : (systemId || 'Unknown Integration');
+
+      // 8. Parse execution log messages and details
+      const msgBlocks = block.split(/<(?:[a-zA-Z0-9_]+:)?Background_Process_Message_Data>/);
+      msgBlocks.shift();
+
+      const parsedLogs: string[] = [];
+      let capturedError: string | null = null;
+
+      for (const msgBlock of msgBlocks) {
+        const timestampMatch = msgBlock.match(/<(?:[a-zA-Z0-9_]+:)?Timestamp>([^<]+)<\//);
+        const severityMatch = msgBlock.match(/(?:[a-zA-Z0-9_]+:)?type=["']Message_Severity_Level["'][^>]*?>([^<]+)<\//)
+          || msgBlock.match(/<(?:[a-zA-Z0-9_]+:)?Severity>([^<]+)<\//);
+        const summaryMatch = msgBlock.match(/<(?:[a-zA-Z0-9_]+:)?Message_Summary>([^<]+)<\//);
+        const detailMatch = msgBlock.match(/<(?:[a-zA-Z0-9_]+:)?Message_Detail>([^<]+)<\//);
+
+        if (summaryMatch) {
+          const timestamp = timestampMatch ? timestampMatch[1] : '';
+          const severity = severityMatch ? severityMatch[1] : 'INFO';
+          const summary = summaryMatch[1];
+          const detail = detailMatch ? `: ${detailMatch[1]}` : '';
+
+          parsedLogs.push(`[${timestamp}] [${severity}] ${summary}${detail}`);
+
+          if (severity === 'ERROR' || severity === 'CRITICAL') {
+            if (!capturedError) {
+              capturedError = `${summary}${detail}`;
+            }
+          }
+        }
+      }
+
+      // If we don't have an error from messages but status is not Completed, get response message
+      let finalError = capturedError;
+      if (!finalError && statusMatch && statusMatch[1] !== 'Completed') {
+        const responseMsgMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Integration_Response_Message>([^<]+)<\//);
+        if (responseMsgMatch) {
+          finalError = responseMsgMatch[1];
+        } else {
+          finalError = `Integration completed with status: ${statusMatch[1]}`;
+        }
+      }
 
       if (idMatch && statusMatch && startedMatch) {
         events.push({
@@ -325,8 +381,8 @@ export class WorkdayService {
           runBy: runByMatch ? runByMatch[1] : 'System',
           startedAt: new Date(startedMatch[1]),
           completedAt: completedMatch ? new Date(completedMatch[1]) : null,
-          logs: logsMatch ? logsMatch[1] : 'No logs attached.',
-          errorMessage: errorMatch ? errorMatch[1] : null,
+          logs: parsedLogs.length > 0 ? parsedLogs.join('\n') : 'No logs attached.',
+          errorMessage: finalError,
           workdaySystemId: systemId,
           workdaySystemName: systemName,
         });
@@ -364,6 +420,82 @@ export class WorkdayService {
         },
       ];
     }
+  }
+
+  async getRawIntegrationSystems(config: WorkdayConfig): Promise<string> {
+    if (this.isPlaceholder(config)) {
+      throw new Error('Workday credentials are not fully configured. Please replace placeholders in your .env file.');
+    }
+
+    const accessToken = await this.getAccessToken(config);
+
+    const soapEnvelope = `
+      <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:bsvc="urn:com.workday/bsvc">
+         <soapenv:Header/>
+         <soapenv:Body>
+            <bsvc:Get_Integration_Systems_Request bsvc:version="v43.0"/>
+         </soapenv:Body>
+      </soapenv:Envelope>
+    `;
+
+    const soapUrl = this.getSoapUrl(config);
+    const response = await axios.post(
+      soapUrl,
+      soapEnvelope,
+      {
+        headers: {
+          'Content-Type': 'text/xml;charset=UTF-8',
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async getRawIntegrationEvents(config: WorkdayConfig, since: Date, workdaySystemId?: string | null): Promise<string> {
+    if (this.isPlaceholder(config)) {
+      throw new Error('Workday credentials are not fully configured. Please replace placeholders in your .env file.');
+    }
+
+    const accessToken = await this.getAccessToken(config);
+
+    const soapEnvelope = `
+      <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:bsvc="urn:com.workday/bsvc">
+         <soapenv:Header/>
+         <soapenv:Body>
+            <bsvc:Get_Integration_Events_Request>
+               <bsvc:Request_Criteria>
+                  ${
+                    workdaySystemId
+                      ? `
+                  <bsvc:Integration_System_Reference>
+                     <bsvc:ID bsvc:type="Integration_System_ID">${workdaySystemId}</bsvc:ID>
+                  </bsvc:Integration_System_Reference>
+                  `
+                      : ''
+                  }
+                  <bsvc:Sent_After>${since.toISOString()}</bsvc:Sent_After>
+               </bsvc:Request_Criteria>
+               <bsvc:Response_Filter>
+                  <bsvc:Count>20</bsvc:Count>
+               </bsvc:Response_Filter>
+            </bsvc:Get_Integration_Events_Request>
+         </soapenv:Body>
+      </soapenv:Envelope>
+    `;
+
+    const soapUrl = this.getSoapUrl(config);
+    const response = await axios.post(
+      soapUrl,
+      soapEnvelope,
+      {
+        headers: {
+          'Content-Type': 'text/xml;charset=UTF-8',
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    return response.data;
   }
 
   private extractSoapErrorMessage(error: any): string {

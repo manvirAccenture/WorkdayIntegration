@@ -35,7 +35,8 @@ const RunDetailPage: React.FC = () => {
       const data = await runsApi.getById(runId);
       setRun(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to load run details.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to load run details.');
     } finally {
       setLoading(false);
     }
@@ -53,7 +54,8 @@ const RunDetailPage: React.FC = () => {
       const result = await runsApi.relaunch(runId);
       setRelaunchMessage(`✓ ${result.message} (New Event: ${result.launchedEventId})`);
     } catch (err: any) {
-      setRelaunchMessage(`✗ Relaunch failed: ${err.message}`);
+      const backendError = err.response?.data?.error || err.message;
+      setRelaunchMessage(`✗ Relaunch failed: ${backendError}`);
     } finally {
       setRelaunchLoading(false);
     }
@@ -67,7 +69,8 @@ const RunDetailPage: React.FC = () => {
       const data = await runsApi.getById(runId);
       setRun(data);
     } catch (err: any) {
-      alert(`Failed to apply fix: ${err.message}`);
+      const backendError = err.response?.data?.error || err.message;
+      alert(`Failed to apply fix: ${backendError}`);
     } finally {
       setApplyFixLoading(false);
     }

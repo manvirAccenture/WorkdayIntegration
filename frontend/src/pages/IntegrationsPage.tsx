@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -21,8 +22,10 @@ import type {
 const POLLING_OPTIONS = ['10m', '30m', '1h', '1d'];
 
 const IntegrationsPage: React.FC = () => {
+  const navigate = useNavigate();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
@@ -49,7 +52,8 @@ const IntegrationsPage: React.FC = () => {
       const data = await integrationsApi.list();
       setIntegrations(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to load integrations.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to load integrations.');
     } finally {
       setLoading(false);
     }
@@ -68,7 +72,8 @@ const IntegrationsPage: React.FC = () => {
       setSuccess(`Discovered ${discovered.length} integration(s) from Workday.`);
       fetchIntegrations();
     } catch (err: any) {
-      setError(err.message || 'Failed to discover integrations from Workday.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to discover integrations from Workday.');
     } finally {
       setDiscovering(false);
     }
@@ -90,7 +95,8 @@ const IntegrationsPage: React.FC = () => {
       });
       fetchIntegrations();
     } catch (err: any) {
-      setError(err.message || 'Failed to create integration.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to create integration.');
     }
   };
 
@@ -112,7 +118,8 @@ const IntegrationsPage: React.FC = () => {
       setEditingIntegration(null);
       fetchIntegrations();
     } catch (err: any) {
-      setError(err.message || 'Failed to update integration.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to update integration.');
     }
   };
 
@@ -123,7 +130,8 @@ const IntegrationsPage: React.FC = () => {
       const result = await integrationsApi.pollNow(id);
       setSuccess(`Polled "${name}": ${result.pulledEventsCount} event(s) pulled.`);
     } catch (err: any) {
-      setError(err.message || `Failed to poll integration "${name}".`);
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || `Failed to poll integration "${name}".`);
     }
   };
 
@@ -153,6 +161,12 @@ const IntegrationsPage: React.FC = () => {
     setEditingIntegration({ ...integration });
     setIsEditOpen(true);
   };
+
+  const filteredIntegrations = integrations.filter(
+    (integ) =>
+      integ.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      integ.workdaySystemId.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   if (loading) return <LoadingSpinner text="Loading integrations..." />;
 
@@ -197,6 +211,20 @@ const IntegrationsPage: React.FC = () => {
           </div>
         )}
 
+        {integrations.length > 0 && (
+          <div className="search-bar-container" style={{ marginBottom: '20px', position: 'relative' }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+            <input
+              type="text"
+              placeholder="Search integrations by name or System ID..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="form-input"
+              style={{ paddingLeft: '38px', width: '100%' }}
+            />
+          </div>
+        )}
+
         {integrations.length === 0 ? (
           <EmptyState
             icon={Layers}
@@ -213,6 +241,12 @@ const IntegrationsPage: React.FC = () => {
               </div>
             }
           />
+        ) : filteredIntegrations.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="No Matching Integrations"
+            description="Try searching with a different name or System ID."
+          />
         ) : (
           <div className="data-table-wrapper">
             <table className="data-table">
@@ -228,8 +262,13 @@ const IntegrationsPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {integrations.map((integ) => (
-                  <tr key={integ.id}>
+                {filteredIntegrations.map((integ) => (
+                  <tr
+                    key={integ.id}
+                    className="clickable-row"
+                    onDoubleClick={() => navigate(`/integrations/${integ.id}`)}
+                    title="Double-click to view integration details"
+                  >
                     <td className="table-cell-name">{integ.name}</td>
                     <td className="table-cell-mono">{integ.workdaySystemId}</td>
                     <td>{integ.category || '—'}</td>

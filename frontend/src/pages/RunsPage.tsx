@@ -28,7 +28,13 @@ const RunsPage: React.FC = () => {
       const data = await runsApi.list(filters);
       setRuns(data);
     } catch (err: any) {
-      setError(err.message || 'Failed to load run events.');
+      const backendError = err.response?.data?.error || err.message;
+      const isNoRunsError = backendError?.includes('No integration runs');
+      if (isNoRunsError) {
+        setRuns([]);
+      } else {
+        setError(backendError || 'Failed to load run events.');
+      }
     } finally {
       setLoading(false);
     }

@@ -37,6 +37,11 @@ export const integrationsApi = {
     return data;
   },
 
+  getById: async (id: string): Promise<Integration> => {
+    const { data } = await apiClient.get(`/integrations/${id}`);
+    return data;
+  },
+
   discover: async (): Promise<Integration[]> => {
     const { data } = await apiClient.get('/integrations/discover');
     return data;

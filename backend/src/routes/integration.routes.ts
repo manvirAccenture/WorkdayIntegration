@@ -6,6 +6,7 @@ const router = Router();
 
 router.get('/', integrationController.list);
 router.get('/discover', integrationController.discover);
+router.get('/:id', integrationController.getById);
 router.post('/', integrationController.create);
 router.put('/:id', integrationController.update);
 

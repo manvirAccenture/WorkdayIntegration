@@ -17,54 +17,19 @@ export class IntegrationRunService {
   private aiService = new AiService();
 
   async listAll(filters?: { status?: string; integrationId?: string }): Promise<any[]> {
-    try {
-      return await this.runRepo.findAll(filters);
-    } catch (err: any) {
-      console.warn('[IntegrationRunService] Error listing runs from DB:', err.message);
-      // Fallback mocks if DB query fails (e.g. database not migrated yet)
-      return [
-        {
-          id: 'Event_20260703_9941a',
-          integrationId: filters?.integrationId || 'mock-id-1',
-          status: filters?.status || 'Failed',
-          runBy: 'wd_admin_sync',
-          startedAt: new Date(Date.now() - 10 * 60 * 1000),
-          completedAt: new Date(Date.now() - 8 * 60 * 1000),
-          errorMessage: "Workday Web Service Error: Schema validation failed.",
-        }
-      ];
+    const runs = await this.runRepo.findAll(filters);
+    if (!runs || runs.length === 0) {
+      throw new Error('No integration runs found in the database. Please trigger a poll first to sync data from Workday.');
     }
+    return runs;
   }
 
   async getById(id: string): Promise<any> {
-    try {
-      const run = await this.runRepo.findById(id);
-      if (run) return run;
-    } catch (err: any) {
-      console.warn('[IntegrationRunService] Error getting run by ID from DB:', err.message);
+    const run = await this.runRepo.findById(id);
+    if (!run) {
+      throw new Error(`Integration run event with ID ${id} not found in the database.`);
     }
-
-    // Fallback Mock Details
-    return {
-      id: id,
-      integrationId: 'mock-id-1',
-      status: 'Failed',
-      runBy: 'wd_admin_sync',
-      startedAt: new Date(Date.now() - 10 * 60 * 1000),
-      completedAt: new Date(Date.now() - 8 * 60 * 1000),
-      logs: '[DEBUG] Initiating SOAP Handshake...\n[ERROR] Request XML validation failed: element \'Account_Code\' must have length >= 4.',
-      errorMessage: "Request XML validation failed: element 'Account_Code' must have length >= 4",
-      integration: {
-        id: 'mock-id-1',
-        workdaySystemId: 'INT_SYS_REVENUE_SYNC',
-        name: 'Sync Shopify Revenue Log',
-      },
-      aiAnalysis: {
-        detectedRootCause: 'Workday web service validation rejected the invoice line item due to a short account code string.',
-        suggestedFix: '### Troubleshooting Steps\n1. Locate record code line `324` in input mapping configuration.\n2. Pad value to satisfy field validation lengths (> 4 chars).\n3. Re-run integration.',
-        applied: false,
-      }
-    };
+    return run;
   }
 
   async relaunch(runId: string): Promise<{ success: boolean; launchedEventId: string; message: string }> {
@@ -128,27 +93,9 @@ export class IntegrationRunService {
   }
 
   async pollIntegration(integrationId: string): Promise<{ success: boolean; pulledEventsCount: number; message: string }> {
-    let integration: Integration | null = null;
-    try {
-      integration = await this.integrationRepo.findById(integrationId);
-    } catch (err: any) {
-      console.warn('[Poller] DB connection issue fetching integration:', err.message);
-    }
-
-    // fallback mock integration
+    const integration = await this.integrationRepo.findById(integrationId);
     if (!integration) {
-      integration = {
-        id: integrationId,
-        workdaySystemId: 'INT_SYS_REVENUE_SYNC',
-        name: 'Sync Shopify Revenue Log',
-        description: 'Mock',
-        category: 'Finance',
-        isActive: true,
-        autoLaunch: false,
-        pollingInterval: '10m',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+      throw new Error(`Integration with ID ${integrationId} does not exist in the database.`);
     }
 
     let config = await this.configRepo.getFirst();

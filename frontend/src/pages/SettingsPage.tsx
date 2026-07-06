@@ -44,7 +44,8 @@ const SettingsPage: React.FC = () => {
         refreshToken: '',
       });
     } catch (err: any) {
-      setError(err.message || 'Failed to load configuration.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to load configuration.');
     } finally {
       setLoading(false);
     }
@@ -63,7 +64,8 @@ const SettingsPage: React.FC = () => {
       setSuccess(result.message);
       fetchConfig();
     } catch (err: any) {
-      setError(err.message || 'Failed to save configuration.');
+      const backendError = err.response?.data?.error || err.message;
+      setError(backendError || 'Failed to save configuration.');
     } finally {
       setSaving(false);
     }

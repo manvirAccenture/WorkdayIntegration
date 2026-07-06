@@ -19,8 +19,7 @@ export class AiService {
     const apiKey = env.GEMINI_API_KEY;
 
     if (this.isPlaceholder(apiKey)) {
-      console.log('[AiService] Using Mock Gemini AI Analysis (API Key not set).');
-      return this.generateMockAnalysis(integrationName, errorMessage, logs);
+      throw new Error('Gemini API key is not configured. Please set a valid GEMINI_API_KEY in your env configuration.');
     }
 
     try {

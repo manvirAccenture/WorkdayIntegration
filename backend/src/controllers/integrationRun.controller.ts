@@ -37,7 +37,8 @@ export class IntegrationRunController {
   relaunch = async (req: Request, res: Response): Promise<void> => {
     try {
       const { runId } = req.params;
-      const result = await this.runService.relaunch(runId);
+      const { launchParams } = req.body;
+      const result = await this.runService.relaunch(runId, launchParams);
       res.status(202).json(result);
     } catch (error: any) {
       console.error('[IntegrationRunController] Error launching integration:', error);

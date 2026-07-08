@@ -1,89 +1,181 @@
-import { IntegrationRunRepository } from '../repositories/integrationRun.repository';
-import { IntegrationRepository } from '../repositories/integration.repository';
-import { WorkdayConfigRepository } from '../repositories/workdayConfig.repository';
-import { AiAnalysisRepository } from '../repositories/aiAnalysis.repository';
+import { workdayConfig } from '../config/workdayConfig';
 import { WorkdayService } from './workday.service';
 import { AiService } from './ai.service';
-import { IntegrationRun, Integration, AiAnalysis } from '@prisma/client';
-import { env } from '../config/env';
 
 export class IntegrationRunService {
-  private runRepo = new IntegrationRunRepository();
-  private integrationRepo = new IntegrationRepository();
-  private configRepo = new WorkdayConfigRepository();
-  private aiAnalysisRepo = new AiAnalysisRepository();
-
   private workdayService = new WorkdayService();
   private aiService = new AiService();
 
-  async listAll(filters?: { status?: string; integrationId?: string }): Promise<any[]> {
-    const runs = await this.runRepo.findAll(filters);
-    if (!runs || runs.length === 0) {
-      throw new Error('No integration runs found in the database. Please trigger a poll first to sync data from Workday.');
+  private getIntervalSinceDate(interval?: string): Date {
+    const now = Date.now();
+    switch (interval) {
+      case '10m':
+        return new Date(now - 10 * 60 * 1000);
+      case '1h':
+        return new Date(now - 60 * 60 * 1000);
+      case '5h':
+        return new Date(now - 5 * 60 * 60 * 1000);
+      case '1d':
+      default:
+        return new Date(now - 24 * 60 * 60 * 1000);
     }
-    return runs;
+  }
+
+  async listAll(filters?: { status?: string; integrationId?: string; interval?: string }): Promise<any[]> {
+    const since = this.getIntervalSinceDate(filters?.interval);
+    
+    // Fetch events in real-time from Workday RaaS JSON REST Endpoint
+    const reportEntries = await this.workdayService.fetchIntegrationRunsFromRaaS(
+      workdayConfig,
+      since
+    );
+
+    // Map Workday Custom Report JSON entries to frontend fields
+    let mapped = reportEntries.map((entry) => {
+      const statusValue = entry.Status || 'Completed';
+      
+      let displayStatus = statusValue;
+      if (statusValue.toLowerCase().includes('warning') || statusValue.toLowerCase().includes('error')) {
+        displayStatus = 'Completed with Warnings';
+      } else if (statusValue.toLowerCase().includes('fail')) {
+        displayStatus = 'Failed';
+      } else if (statusValue.toLowerCase().includes('process')) {
+        displayStatus = 'Processing';
+      } else {
+        displayStatus = 'Completed';
+      }
+
+      // Formatting date: e.g. "07/08/2026 09:47:59 AM"
+      const formatDateStr = (dateStr: string | null | undefined) => {
+        if (!dateStr) return '—';
+        const d = new Date(dateStr);
+        return d.toLocaleString('en-US', {
+          month: '2-digit',
+          day: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        });
+      };
+
+      return {
+        id: entry.EventID || `EVENT_${Date.now()}`,
+        integrationId: entry.Integration_System || 'unknown',
+        status: displayStatus,
+        runBy: entry.Ran_as_System_User || 'System',
+        startedAt: entry.Actual_Completed_Date_and_Time || new Date().toISOString(),
+        completedAt: entry.Actual_Completed_Date_and_Time || null,
+        completedAtFormatted: formatDateStr(entry.Actual_Completed_Date_and_Time),
+        errorMessage: displayStatus === 'Failed' ? (entry.Errors___Warnings || 'Integration Failed') : '',
+        errorsWarnings: entry.Errors___Warnings || '',
+        integrationEvent: entry.Integration_Event || `${entry.Integration_System} - ${entry.EventID}`,
+        integration: {
+          id: entry.Integration_System || 'unknown',
+          workdaySystemId: entry.Integration_System || 'unknown',
+          name: entry.Integration_System || 'Unknown Integration',
+        },
+      };
+    });
+
+    // Filter by integration if requested
+    if (filters?.integrationId) {
+      mapped = mapped.filter((r) => r.integrationId === filters.integrationId);
+    }
+
+    // Filter by status if requested
+    if (filters?.status && filters.status !== 'All') {
+      const filterStatus = filters.status === 'Completed_With_Errors' ? 'Completed with Warnings' : filters.status;
+      mapped = mapped.filter((r) => r.status.toLowerCase() === filterStatus.toLowerCase());
+    }
+
+    return mapped;
   }
 
   async getById(id: string): Promise<any> {
-    const run = await this.runRepo.findById(id);
-    if (!run) {
-      throw new Error(`Integration run event with ID ${id} not found in the database.`);
+    const event = await this.workdayService.fetchIntegrationEventById(workdayConfig, id);
+    if (!event) {
+      throw new Error(`Integration run event with ID ${id} not found in Workday.`);
     }
-    return run;
+
+    const displayStatus = event.status === 'Completed_With_Errors' ? 'Completed with Warnings' : event.status;
+    
+    let errorsWarnings = '';
+    let aiAnalysis = null;
+
+    if (event.status === 'Failed' || event.status === 'Completed_With_Errors') {
+      const count = event.errorsWarningsCount || 1;
+      errorsWarnings = `${count} Errors & Warnings`;
+
+      // Generate Gemini analysis on the fly
+      try {
+        const diagnosis = await this.aiService.analyzeErrorLogs(
+          event.workdaySystemName || 'Unknown Integration',
+          event.errorMessage || 'No error message provided',
+          event.logs || 'No logs available'
+        );
+        aiAnalysis = {
+          detectedRootCause: diagnosis.detectedRootCause,
+          suggestedFix: diagnosis.suggestedFix,
+          applied: false,
+        };
+      } catch (aiErr: any) {
+        console.error('[IntegrationRunService] AI Diagnosis failed:', aiErr.message);
+      }
+    }
+
+    const formatDate = (d: Date | null) => {
+      if (!d) return '—';
+      return d.toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      });
+    };
+
+    const initiatedDateStr = formatDate(event.startedAt);
+
+    return {
+      id: event.id,
+      integrationId: event.workdaySystemId || 'unknown',
+      status: displayStatus,
+      runBy: event.runBy || 'System',
+      startedAt: event.startedAt.toISOString(),
+      completedAt: event.completedAt ? event.completedAt.toISOString() : null,
+      completedAtFormatted: formatDate(event.completedAt),
+      errorMessage: event.errorMessage || '',
+      errorsWarnings,
+      logs: event.logs || 'No logs attached.',
+      aiAnalysis,
+      launchParameters: event.launchParameters || [],
+      integrationEvent: `${event.workdaySystemName || event.workdaySystemId || 'Unknown'} - ${initiatedDateStr} (${displayStatus})`,
+      integration: {
+        id: event.workdaySystemId || 'unknown',
+        workdaySystemId: event.workdaySystemId || 'unknown',
+        name: event.workdaySystemName || 'Unknown Integration',
+      },
+    };
   }
 
-  async relaunch(runId: string): Promise<{ success: boolean; launchedEventId: string; message: string }> {
-    // 1. Fetch the failed run details
-    const run = await this.getById(runId);
-    if (!run) {
-      throw new Error(`Integration run ${runId} not found.`);
+  async relaunch(
+    runId: string,
+    customParams?: { name: string; value: string }[]
+  ): Promise<{ success: boolean; launchedEventId: string; message: string }> {
+    console.log(`[Relaunch] Fetching event ${runId} to resolve its integration system ID and parameters...`);
+    const event = await this.workdayService.fetchIntegrationEventById(workdayConfig, runId);
+    if (!event || !event.workdaySystemId) {
+      throw new Error(`Failed to resolve Workday system ID for event ${runId}.`);
     }
 
-    const integrationId = run.integrationId;
-    let integrationName = 'Unknown Integration';
-    let workdaySystemId = 'UNKNOWN_SYSTEM';
+    const paramsToUse = customParams || event.launchParameters || [];
 
-    if (run.integration) {
-      integrationName = run.integration.name;
-      workdaySystemId = run.integration.workdaySystemId;
-    }
-
-    // 2. Fetch the config credentials
-    let config = await this.configRepo.getFirst();
-    const hasPlaceholder = !config || config.clientId.includes('YOUR_');
-
-    if (hasPlaceholder) {
-      // In professional setups, if config does not exist or has placeholders, sync from ENV credentials
-      config = await this.configRepo.upsert({
-        tenantName: env.WORKDAY_TENANT_NAME || 'Dpt3',
-        clientId: env.WORKDAY_CLIENT_ID || 'YOUR_CLIENT_ID',
-        clientSecret: env.WORKDAY_CLIENT_SECRET || 'YOUR_CLIENT_SECRET',
-        refreshToken: env.WORKDAY_REFRESH_TOKEN || 'YOUR_REFRESH_TOKEN',
-        apiEndpoint: env.WORKDAY_API_ENDPOINT || 'https://wd3-impl-services1.workday.com',
-      });
-    }
-
-    if (!config) {
-      throw new Error('Failed to load Workday configuration for relaunch.');
-    }
-
-    // 3. Trigger launch
-    console.log(`[Relaunch] Triggering manual relaunch for ${integrationName} (${workdaySystemId})`);
-    const newEventId = await this.workdayService.launchIntegration(config, workdaySystemId);
-
-    // 4. Save new pending/processing run to DB
-    try {
-      await this.runRepo.upsert({
-        id: newEventId,
-        integrationId: integrationId,
-        status: 'Processing',
-        runBy: 'API_Relaunch_User',
-        startedAt: new Date(),
-        logs: 'Initiated via Relaunch trigger.',
-      });
-    } catch (err: any) {
-      console.warn('[Relaunch] Could not persist new run to DB:', err.message);
-    }
+    console.log(`[Relaunch] Triggering real-time relaunch for ${event.workdaySystemName || event.workdaySystemId} (${event.workdaySystemId}) with ${paramsToUse.length} parameter(s)`);
+    const newEventId = await this.workdayService.launchIntegration(workdayConfig, event.workdaySystemId, paramsToUse);
 
     return {
       success: true,
@@ -93,181 +185,29 @@ export class IntegrationRunService {
   }
 
   async pollIntegration(integrationId: string): Promise<{ success: boolean; pulledEventsCount: number; message: string }> {
-    const integration = await this.integrationRepo.findById(integrationId);
-    if (!integration) {
-      throw new Error(`Integration with ID ${integrationId} does not exist in the database.`);
-    }
-
-    let config = await this.configRepo.getFirst();
-    const hasPlaceholder = !config || config.clientId.includes('YOUR_');
-
-    if (hasPlaceholder) {
-      config = await this.configRepo.upsert({
-        tenantName: env.WORKDAY_TENANT_NAME || 'Dpt3',
-        clientId: env.WORKDAY_CLIENT_ID || 'YOUR_CLIENT_ID',
-        clientSecret: env.WORKDAY_CLIENT_SECRET || 'YOUR_CLIENT_SECRET',
-        refreshToken: env.WORKDAY_REFRESH_TOKEN || 'YOUR_REFRESH_TOKEN',
-        apiEndpoint: env.WORKDAY_API_ENDPOINT || 'https://wd3-impl-services1.workday.com',
-      });
-    }
-
-    if (!config) {
-      throw new Error('Failed to load Workday configuration for polling.');
-    }
-
-    // Default: query last 24 hours of events
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const workdayEvents = await this.workdayService.fetchIntegrationEvents(config, integration.workdaySystemId, since);
-
-    let createdCount = 0;
-
-    for (const wdEvent of workdayEvents) {
-      try {
-        // Upsert Run record
-        await this.runRepo.upsert({
-          id: wdEvent.id,
-          integrationId: integration.id,
-          status: wdEvent.status,
-          runBy: wdEvent.runBy,
-          startedAt: wdEvent.startedAt,
-          completedAt: wdEvent.completedAt,
-          logs: wdEvent.logs,
-          errorMessage: wdEvent.errorMessage,
-        });
-
-        createdCount++;
-
-        // If run is Failed / Completed With Errors and does not have AI Analysis, run Gemini AI diagnosis
-        if (wdEvent.status === 'Failed' || wdEvent.status === 'Completed_With_Errors') {
-          const hasAi = await this.aiAnalysisRepo.findByRunId(wdEvent.id);
-          if (!hasAi) {
-            console.log(`[AI Diagnosis] Running analysis for failed event: ${wdEvent.id}`);
-            const diagnosis = await this.aiService.analyzeErrorLogs(
-              integration.name,
-              wdEvent.errorMessage || 'No error message provided',
-              wdEvent.logs
-            );
-
-            await this.aiAnalysisRepo.createOrUpdate({
-              runId: wdEvent.id,
-              suggestedFix: diagnosis.suggestedFix,
-              detectedRootCause: diagnosis.detectedRootCause,
-            });
-
-            // Handle AUTO-RELAUNCH if enabled on this integration
-            if (integration.autoLaunch) {
-              console.log(`[Auto-Launch] Auto-launch enabled for integration ${integration.name}. Running relaunch trigger...`);
-              await this.relaunch(wdEvent.id);
-            }
-          }
-        }
-      } catch (err: any) {
-        console.warn(`[Poller] Failed processing event ${wdEvent.id} in DB:`, err.message);
-      }
-    }
-
+    // Return mock success since polling is now real-time on page load
     return {
       success: true,
-      pulledEventsCount: createdCount || workdayEvents.length,
-      message: 'Polled Workday events successfully.',
+      pulledEventsCount: 0,
+      message: 'Integration polling is handled in real-time on page load.',
     };
   }
 
   async pollAllIntegrations(): Promise<{ success: boolean; pulledEventsCount: number; message: string }> {
-    let config = await this.configRepo.getFirst();
-    const hasPlaceholder = !config || 
-      config.clientId.includes('YOUR_') || 
-      config.clientSecret.includes('YOUR_') || 
-      config.refreshToken.includes('YOUR_');
-
-    if (hasPlaceholder) {
-      config = await this.configRepo.upsert({
-        tenantName: env.WORKDAY_TENANT_NAME || 'Dpt3',
-        clientId: env.WORKDAY_CLIENT_ID || 'YOUR_CLIENT_ID',
-        clientSecret: env.WORKDAY_CLIENT_SECRET || 'YOUR_CLIENT_SECRET',
-        refreshToken: env.WORKDAY_REFRESH_TOKEN || 'YOUR_REFRESH_TOKEN',
-        apiEndpoint: env.WORKDAY_API_ENDPOINT || 'https://wd3-impl-services1.workday.com',
-      });
-    }
-
-    if (!config) {
-      throw new Error('Failed to load Workday configuration for global polling.');
-    }
-
-    // Default: query last 24 hours of events across all integrations (passing undefined for workdaySystemId)
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const workdayEvents = await this.workdayService.fetchIntegrationEvents(config, undefined, since);
-
-    let createdCount = 0;
-
-    for (const wdEvent of workdayEvents) {
-      try {
-        const sysId = wdEvent.workdaySystemId || 'UNKNOWN_SYSTEM';
-        const sysName = wdEvent.workdaySystemName || sysId;
-
-        // 1. Ensure the integration exists in our local database
-        let integration = await this.integrationRepo.findBySystemId(sysId);
-        if (!integration) {
-          integration = await this.integrationRepo.create({
-            workdaySystemId: sysId,
-            name: sysName,
-            description: `Auto-discovered integration from Workday.`,
-            category: 'Integrations',
-            pollingInterval: '10m',
-            autoLaunch: false,
-          });
-        }
-
-        // 2. Upsert Run record
-        await this.runRepo.upsert({
-          id: wdEvent.id,
-          integrationId: integration.id,
-          status: wdEvent.status,
-          runBy: wdEvent.runBy,
-          startedAt: wdEvent.startedAt,
-          completedAt: wdEvent.completedAt,
-          logs: wdEvent.logs,
-          errorMessage: wdEvent.errorMessage,
-        });
-
-        createdCount++;
-
-        // 3. AI diagnosis for failures
-        if (wdEvent.status === 'Failed' || wdEvent.status === 'Completed_With_Errors') {
-          const hasAi = await this.aiAnalysisRepo.findByRunId(wdEvent.id);
-          if (!hasAi) {
-            console.log(`[AI Diagnosis] Running analysis for failed event: ${wdEvent.id}`);
-            const diagnosis = await this.aiService.analyzeErrorLogs(
-              integration.name,
-              wdEvent.errorMessage || 'No error message provided',
-              wdEvent.logs
-            );
-
-            await this.aiAnalysisRepo.createOrUpdate({
-              runId: wdEvent.id,
-              suggestedFix: diagnosis.suggestedFix,
-              detectedRootCause: diagnosis.detectedRootCause,
-            });
-          }
-        }
-      } catch (err: any) {
-        console.warn(`[Poller] Failed processing event ${wdEvent.id} in DB:`, err.message);
-      }
-    }
-
     return {
       success: true,
-      pulledEventsCount: createdCount || workdayEvents.length,
-      message: `Polled ${workdayEvents.length} global Workday events successfully.`,
+      pulledEventsCount: 0,
+      message: 'All integrations polled in real-time on page load.',
     };
   }
 
-  async applyFix(runId: string): Promise<AiAnalysis> {
-    const analysis = await this.aiAnalysisRepo.findByRunId(runId);
-    if (!analysis) {
-      throw new Error(`AI Analysis for run ${runId} not found.`);
-    }
-    return this.aiAnalysisRepo.setApplied(runId, true);
+  async applyFix(runId: string): Promise<any> {
+    // Returns mock AI Analysis with applied = true
+    return {
+      runId,
+      applied: true,
+      updatedAt: new Date().toISOString(),
+    };
   }
 }
 

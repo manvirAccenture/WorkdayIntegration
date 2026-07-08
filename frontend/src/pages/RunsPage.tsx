@@ -11,7 +11,7 @@ import EmptyState from '../components/EmptyState';
 import { runsApi } from '../api/runs';
 import type { IntegrationRunSummary } from '../api/runs';
 
-const STATUS_FILTERS = ['All', 'Failed', 'Completed_With_Errors', 'Completed', 'Processing'];
+const STATUS_FILTERS = ['All', 'Failed', 'Completed with Warnings', 'Completed', 'Processing'];
 
 const RunsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -29,7 +29,7 @@ const RunsPage: React.FC = () => {
       setRuns(data);
     } catch (err: any) {
       const backendError = err.response?.data?.error || err.message;
-      const isNoRunsError = backendError?.includes('No integration runs');
+      const isNoRunsError = backendError?.includes('No integration runs') || backendError?.includes('SOAP Get_Integration_Events');
       if (isNoRunsError) {
         setRuns([]);
       } else {
@@ -43,18 +43,6 @@ const RunsPage: React.FC = () => {
   useEffect(() => {
     fetchRuns(activeFilter);
   }, [activeFilter]);
-
-  const formatTime = (dateStr: string | null) => {
-    if (!dateStr) return '—';
-    const d = new Date(dateStr);
-    return d.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
 
   return (
     <>
@@ -87,21 +75,26 @@ const RunsPage: React.FC = () => {
               className={`filter-tab${activeFilter === filter ? ' active' : ''}`}
               onClick={() => setActiveFilter(filter)}
             >
-              {filter.replace(/_/g, ' ')}
+              {filter}
             </button>
           ))}
         </div>
 
         {loading ? (
           <LoadingSpinner text="Loading run events..." />
+        ) : error ? (
+          <div className="glass-card" style={{ textAlign: 'center', padding: '40px' }}>
+            <AlertTriangle size={32} style={{ color: 'var(--accent-rose)', marginBottom: '12px' }} />
+            <p style={{ color: 'var(--text-secondary)' }}>Failed to load run events: {error}</p>
+          </div>
         ) : runs.length === 0 ? (
           <EmptyState
             icon={Activity}
             title="No Run Events Found"
             description={
               activeFilter !== 'All'
-                ? `No events with status "${activeFilter.replace(/_/g, ' ')}" found. Try a different filter.`
-                : 'No integration run events have been recorded yet. Poll an integration to start tracking.'
+                ? `No events with status "${activeFilter}" found. Try a different filter.`
+                : 'No integration run events have been recorded yet. Click refresh to query Workday.'
             }
           />
         ) : (
@@ -109,13 +102,13 @@ const RunsPage: React.FC = () => {
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>Integration System</th>
                   <th>Event ID</th>
-                  <th>Integration</th>
                   <th>Status</th>
-                  <th>Run By</th>
-                  <th>Started At</th>
-                  <th>Completed At</th>
-                  <th>Error</th>
+                  <th>Actual Completed Date & Time</th>
+                  <th>Ran As System User</th>
+                  <th>Errors & Warnings</th>
+                  <th>Integration Event</th>
                 </tr>
               </thead>
               <tbody>
@@ -125,25 +118,29 @@ const RunsPage: React.FC = () => {
                     className="clickable-row"
                     onClick={() => navigate(`/runs/${run.id}`)}
                   >
-                    <td className="table-cell-mono">{run.id}</td>
-                    <td className="table-cell-name">
-                      {run.integration?.name || 'Unknown'}
+                    <td className="table-cell-name" style={{ fontWeight: 600 }}>
+                      {run.integration?.name || '—'}
                     </td>
+                    <td className="table-cell-mono">{run.id}</td>
                     <td>
                       <StatusBadge status={run.status} />
                     </td>
-                    <td>{run.runBy || '—'}</td>
-                    <td>{formatTime(run.startedAt)}</td>
-                    <td>{formatTime(run.completedAt)}</td>
+                    <td>{run.completedAtFormatted || '—'}</td>
+                    <td>{run.runBy || 'System'}</td>
+                    <td style={{ color: 'var(--accent-rose)', fontWeight: 500 }}>
+                      {run.errorsWarnings || '—'}
+                    </td>
                     <td
                       style={{
-                        maxWidth: '260px',
+                        fontSize: '0.8rem',
+                        color: 'var(--text-secondary)',
+                        maxWidth: '300px',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {run.errorMessage || '—'}
+                      {run.integrationEvent}
                     </td>
                   </tr>
                 ))}

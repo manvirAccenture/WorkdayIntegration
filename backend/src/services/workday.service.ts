@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { WorkdayConfig } from '@prisma/client';
+import { WorkdayConfig } from '../config/workdayConfig';
 
 export interface WorkdayEvent {
   id: string;
@@ -11,6 +11,8 @@ export interface WorkdayEvent {
   errorMessage: string | null;
   workdaySystemId?: string | null;
   workdaySystemName?: string | null;
+  errorsWarningsCount?: number;
+  launchParameters?: { name: string; value: string }[];
 }
 
 export class WorkdayService {
@@ -151,7 +153,64 @@ export class WorkdayService {
     }
   }
 
-  async launchIntegration(config: WorkdayConfig, workdaySystemId: string): Promise<string> {
+  async fetchIntegrationEventById(
+    config: WorkdayConfig,
+    runId: string
+  ): Promise<WorkdayEvent | null> {
+    if (this.isPlaceholder(config)) {
+      throw new Error('Workday credentials are not fully configured. Please replace placeholders in your .env file.');
+    }
+
+    const accessToken = await this.getAccessToken(config);
+
+    const soapEnvelope = `
+      <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:bsvc="urn:com.workday/bsvc">
+         <soapenv:Header>
+            <bsvc:Workday_Common_Header/>
+         </soapenv:Header>
+         <soapenv:Body>
+            <bsvc:Get_Integration_Events_Request>
+               <bsvc:Request_References>
+                  <bsvc:Integration_Event_Reference>
+                     <bsvc:ID bsvc:type="Background_Process_Instance_ID">${runId}</bsvc:ID>
+                  </bsvc:Integration_Event_Reference>
+               </bsvc:Request_References>
+            </bsvc:Get_Integration_Events_Request>
+         </soapenv:Body>
+      </soapenv:Envelope>
+    `;
+
+    try {
+      const soapUrl = this.getSoapUrl(config);
+      console.log(`[WorkdayService] Sending Get_Integration_Events for single ID SOAP request to: ${soapUrl}`);
+      const response = await axios.post(
+        soapUrl,
+        soapEnvelope,
+        {
+          headers: {
+            'Content-Type': 'text/xml;charset=UTF-8',
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+
+      const events = this.parseSoapResponse(response.data);
+      return events.length > 0 ? events[0] : null;
+    } catch (error: any) {
+      if (error.response?.data) {
+        console.error('[WorkdayService] SOAP Request for event ID failed with response:', error.response.data);
+      } else {
+        console.error('[WorkdayService] SOAP Request for event ID failed:', error.message);
+      }
+      throw new Error(`SOAP Get_Integration_Events request failed: ${this.extractSoapErrorMessage(error)}`);
+    }
+  }
+
+  async launchIntegration(
+    config: WorkdayConfig, 
+    workdaySystemId: string,
+    launchParams?: { name: string; value: string }[]
+  ): Promise<string> {
     if (this.isPlaceholder(config)) {
       throw new Error('Workday credentials are not fully configured. Please replace placeholders in your .env file.');
     }
@@ -162,6 +221,25 @@ export class WorkdayService {
     const isEib = workdaySystemId.toUpperCase().includes('EIB');
     const rootElement = isEib ? 'Launch_EIB_Request' : 'Launch_Integration_Event_Request';
 
+    // Construct Launch parameters XML if present
+    let launchParamsXml = '';
+    if (launchParams && launchParams.length > 0) {
+      launchParamsXml = `
+         <bsvc:Integration_Launch_Parameters_Data>
+            ${launchParams.map(param => `
+            <bsvc:Integration_Launch_Parameter_Data>
+               <bsvc:Integration_Launch_Parameter_Reference>
+                  <bsvc:ID bsvc:type="Integration_Launch_Parameter_ID">${param.name}</bsvc:ID>
+               </bsvc:Integration_Launch_Parameter_Reference>
+               <bsvc:Integration_Launch_Parameter_Value_Data>
+                  <bsvc:Value>${param.value}</bsvc:Value>
+               </bsvc:Integration_Launch_Parameter_Value_Data>
+            </bsvc:Integration_Launch_Parameter_Data>
+            `).join('\n')}
+         </bsvc:Integration_Launch_Parameters_Data>
+      `;
+    }
+
     // Construct Launch integration SOAP request for Workday API v47.0
     const soapEnvelope = `
       <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:bsvc="urn:com.workday/bsvc">
@@ -171,6 +249,7 @@ export class WorkdayService {
                <bsvc:Integration_System_Reference>
                   <bsvc:ID bsvc:type="Integration_System_ID">${workdaySystemId}</bsvc:ID>
                </bsvc:Integration_System_Reference>
+               ${launchParamsXml}
             </bsvc:${rootElement}>
          </soapenv:Body>
       </soapenv:Envelope>
@@ -339,6 +418,8 @@ export class WorkdayService {
 
       const parsedLogs: string[] = [];
       let capturedError: string | null = null;
+      let errorCount = 0;
+      let warningCount = 0;
 
       for (const msgBlock of msgBlocks) {
         const timestampMatch = msgBlock.match(/<(?:[a-zA-Z0-9_]+:)?Timestamp>([^<]+)<\//);
@@ -350,15 +431,19 @@ export class WorkdayService {
         if (summaryMatch) {
           const timestamp = timestampMatch ? timestampMatch[1] : '';
           const severity = severityMatch ? severityMatch[1] : 'INFO';
+          const severityUpper = severity.toUpperCase();
           const summary = summaryMatch[1];
           const detail = detailMatch ? `: ${detailMatch[1]}` : '';
 
           parsedLogs.push(`[${timestamp}] [${severity}] ${summary}${detail}`);
 
-          if (severity === 'ERROR' || severity === 'CRITICAL') {
+          if (severityUpper === 'ERROR' || severityUpper === 'CRITICAL') {
+            errorCount++;
             if (!capturedError) {
               capturedError = `${summary}${detail}`;
             }
+          } else if (severityUpper === 'WARNING' || severityUpper === 'WARN') {
+            warningCount++;
           }
         }
       }
@@ -375,6 +460,22 @@ export class WorkdayService {
       }
 
       if (idMatch && statusMatch && startedMatch) {
+        // 9. Extract Launch Parameters
+        const paramBlocks = block.split(/<(?:[a-zA-Z0-9_]+:)?Integration_Launch_Parameter_Data>/);
+        paramBlocks.shift();
+        const launchParameters: { name: string; value: string }[] = [];
+        for (const pBlock of paramBlocks) {
+          const pIdMatch = pBlock.match(/(?:[a-zA-Z0-9_]+:)?type=["']Integration_Launch_Parameter_ID["'][^>]*?>([^<]+)<\//)
+            || pBlock.match(/<(?:[a-zA-Z0-9_]+:)?ID [^>]*?>([^<]+)<\//);
+          const valMatch = pBlock.match(/<(?:[a-zA-Z0-9_]+:)?Value>([^<]+)<\//);
+          if (pIdMatch && valMatch) {
+            launchParameters.push({
+              name: pIdMatch[1],
+              value: valMatch[1]
+            });
+          }
+        }
+
         events.push({
           id: idMatch[1],
           status: statusMatch[1],
@@ -385,6 +486,8 @@ export class WorkdayService {
           errorMessage: finalError,
           workdaySystemId: systemId,
           workdaySystemName: systemName,
+          errorsWarningsCount: errorCount + warningCount,
+          launchParameters: launchParameters,
         });
       }
     }
@@ -511,5 +614,81 @@ export class WorkdayService {
       }
     }
     return error.message;
+  }
+
+  private getRaaSUrl(config: WorkdayConfig, reportOwner: string, reportName: string): string {
+    let host = 'https://wd2-impl-services1.workday.com';
+    let tenant = config.tenantName;
+    try {
+      const url = new URL(config.apiEndpoint);
+      host = url.origin;
+      const match = url.pathname.match(/\/ccx\/service\/([^\/]+)/);
+      if (match) {
+        tenant = match[1];
+      }
+    } catch {
+      // Fallback
+    }
+    return `${host}/ccx/service/customreport2/${tenant}/${reportOwner}/${reportName}`;
+  }
+
+  private formatPDTDate(date: Date): string {
+    // PDT is UTC-7
+    const offsetMs = -7 * 60 * 60 * 1000;
+    const pdtTime = new Date(date.getTime() + offsetMs);
+    
+    const pad = (n: number, width = 2) => String(n).padStart(width, '0');
+    
+    const yyyy = pdtTime.getUTCFullYear();
+    const mm = pad(pdtTime.getUTCMonth() + 1);
+    const dd = pad(pdtTime.getUTCDate());
+    const hh = pad(pdtTime.getUTCHours());
+    const min = pad(pdtTime.getUTCMinutes());
+    const ss = pad(pdtTime.getUTCSeconds());
+    const ms = pad(pdtTime.getUTCMilliseconds(), 3);
+    
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}.${ms}-07:00`;
+  }
+
+  async fetchIntegrationRunsFromRaaS(
+    config: WorkdayConfig,
+    since: Date
+  ): Promise<any[]> {
+    if (this.isPlaceholder(config)) {
+      throw new Error('Workday credentials are not fully configured. Please replace placeholders in your .env file.');
+    }
+
+    const accessToken = await this.getAccessToken(config);
+    const pdtSince = this.formatPDTDate(since);
+    
+    // Construct the custom report URL
+    const reportOwner = 'int_manvir.b.singh';
+    const reportName = 'RAAS_WorkdayProcessMonitor_Report_-_Copy';
+    const raasUrl = this.getRaaSUrl(config, reportOwner, reportName);
+    
+    const requestUrl = `${raasUrl}?Actual_Completed_Date_and_Time=${encodeURIComponent(pdtSince)}&format=json`;
+    console.log(`[WorkdayService] Fetching RaaS Report from: ${requestUrl}`);
+    
+    try {
+      const response = await axios.get(requestUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      });
+      
+      const data = response.data;
+      if (data && data.Report_Entry) {
+        console.log(`[WorkdayService] RaaS Report returned ${data.Report_Entry.length} entries.`);
+        return data.Report_Entry;
+      }
+      return [];
+    } catch (error: any) {
+      console.error('[WorkdayService] RaaS Request failed:', error.message);
+      if (error.response?.data) {
+        console.error('[WorkdayService] RaaS error response:', error.response.data);
+      }
+      throw new Error(`Failed to fetch RaaS Process Monitor report: ${error.message}`);
+    }
   }
 }

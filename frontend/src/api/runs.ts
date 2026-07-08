@@ -15,7 +15,10 @@ export interface IntegrationRunSummary {
   runBy: string | null;
   startedAt: string;
   completedAt: string | null;
+  completedAtFormatted?: string | null;
   errorMessage: string | null;
+  errorsWarnings?: string;
+  integrationEvent?: string;
   integration?: {
     id: string;
     workdaySystemId: string;
@@ -26,6 +29,7 @@ export interface IntegrationRunSummary {
 export interface IntegrationRunDetail extends IntegrationRunSummary {
   logs: string | null;
   aiAnalysis: AiAnalysis | null;
+  launchParameters?: { name: string; value: string }[];
 }
 
 export interface RelaunchResult {
@@ -35,10 +39,11 @@ export interface RelaunchResult {
 }
 
 export const runsApi = {
-  list: async (filters?: { status?: string; integrationId?: string }): Promise<IntegrationRunSummary[]> => {
+  list: async (filters?: { status?: string; integrationId?: string; interval?: string }): Promise<IntegrationRunSummary[]> => {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
     if (filters?.integrationId) params.set('integrationId', filters.integrationId);
+    if (filters?.interval) params.set('interval', filters.interval);
     const { data } = await apiClient.get('/runs', { params });
     return data;
   },
@@ -48,8 +53,8 @@ export const runsApi = {
     return data;
   },
 
-  relaunch: async (runId: string): Promise<RelaunchResult> => {
-    const { data } = await apiClient.post(`/runs/${runId}/relaunch`);
+  relaunch: async (runId: string, launchParams?: { name: string; value: string }[]): Promise<RelaunchResult> => {
+    const { data } = await apiClient.post(`/runs/${runId}/relaunch`, { launchParams });
     return data;
   },
 

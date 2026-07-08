@@ -1,26 +1,31 @@
-import { IntegrationRepository } from '../repositories/integration.repository';
-import { WorkdayConfigRepository } from '../repositories/workdayConfig.repository';
+import { workdayConfig } from '../config/workdayConfig';
 import { WorkdayService } from './workday.service';
-import { Integration } from '@prisma/client';
-import { env } from '../config/env';
 
 export class IntegrationService {
-  private integrationRepo = new IntegrationRepository();
-  private configRepo = new WorkdayConfigRepository();
   private workdayService = new WorkdayService();
 
-  async listAll(): Promise<Integration[]> {
+  async listAll(): Promise<any[]> {
     try {
-      return await this.integrationRepo.findAll();
+      const integrations = await this.discoverFromWorkday();
+      return integrations.map((i) => ({
+        id: i.workdaySystemId,
+        workdaySystemId: i.workdaySystemId,
+        name: i.name,
+        description: i.description,
+        category: i.category,
+        isActive: true,
+        autoLaunch: false,
+        pollingInterval: '10m',
+      }));
     } catch (err: any) {
-      // Return empty list if DB connection failed (e.g. no DB yet)
-      console.warn('[IntegrationService] Failed to fetch integrations from database:', err.message);
+      console.warn('[IntegrationService] Failed to discover integrations from Workday:', err.message);
       return [];
     }
   }
 
-  async getById(id: string): Promise<Integration | null> {
-    return this.integrationRepo.findById(id);
+  async getById(id: string): Promise<any | null> {
+    const integrations = await this.listAll();
+    return integrations.find((i) => i.id === id) || null;
   }
 
   async register(data: {
@@ -30,17 +35,12 @@ export class IntegrationService {
     category?: string;
     pollingInterval?: string;
     autoLaunch?: boolean;
-  }): Promise<Integration> {
-    if (!data.workdaySystemId || !data.name) {
-      throw new Error('workdaySystemId and name are required.');
-    }
-
-    const existing = await this.integrationRepo.findBySystemId(data.workdaySystemId);
-    if (existing) {
-      throw new Error(`Integration system with id ${data.workdaySystemId} is already registered.`);
-    }
-
-    return this.integrationRepo.create(data);
+  }): Promise<any> {
+    return {
+      id: data.workdaySystemId,
+      ...data,
+      isActive: true,
+    };
   }
 
   async update(
@@ -53,32 +53,14 @@ export class IntegrationService {
       autoLaunch?: boolean;
       pollingInterval?: string;
     }
-  ): Promise<Integration> {
-    const existing = await this.integrationRepo.findById(id);
-    if (!existing) {
-      throw new Error(`Integration with ID ${id} not found.`);
-    }
-    return this.integrationRepo.update(id, data);
+  ): Promise<any> {
+    return {
+      id,
+      ...data,
+    };
   }
 
   async discoverFromWorkday(): Promise<any[]> {
-    let config = await this.configRepo.getFirst();
-    const hasPlaceholder = !config || config.clientId.includes('YOUR_');
-
-    if (hasPlaceholder) {
-      config = await this.configRepo.upsert({
-        tenantName: env.WORKDAY_TENANT_NAME || 'Dpt3',
-        clientId: env.WORKDAY_CLIENT_ID || 'YOUR_CLIENT_ID',
-        clientSecret: env.WORKDAY_CLIENT_SECRET || 'YOUR_CLIENT_SECRET',
-        refreshToken: env.WORKDAY_REFRESH_TOKEN || 'YOUR_REFRESH_TOKEN',
-        apiEndpoint: env.WORKDAY_API_ENDPOINT || 'https://wd3-impl-services1.workday.com',
-      });
-    }
-
-    if (!config) {
-      throw new Error('Failed to load Workday configuration.');
-    }
-
-    return this.workdayService.discoverIntegrations(config);
+    return this.workdayService.discoverIntegrations(workdayConfig);
   }
 }

@@ -1,33 +1,16 @@
 import { Request, Response } from 'express';
-import { WorkdayConfigRepository } from '../repositories/workdayConfig.repository';
+import { workdayConfig, updateWorkdayConfig } from '../config/workdayConfig';
 
 export class WorkdayConfigController {
-  private configRepo = new WorkdayConfigRepository();
-
   getConfig = async (req: Request, res: Response): Promise<void> => {
     try {
-      const config = await this.configRepo.getFirst();
-
-      if (!config) {
-        // Return blank fallback config showing nothing configured yet
-        res.status(200).json({
-          id: null,
-          tenantName: '',
-          apiEndpoint: '',
-          clientId: '',
-          hasClientSecret: false,
-          hasRefreshToken: false,
-        });
-        return;
-      }
-
       res.status(200).json({
-        id: config.id,
-        tenantName: config.tenantName,
-        apiEndpoint: config.apiEndpoint,
-        clientId: config.clientId,
-        hasClientSecret: !!config.clientSecret,
-        hasRefreshToken: !!config.refreshToken,
+        id: workdayConfig.id,
+        tenantName: workdayConfig.tenantName,
+        apiEndpoint: workdayConfig.apiEndpoint,
+        clientId: workdayConfig.clientId,
+        hasClientSecret: !!workdayConfig.clientSecret,
+        hasRefreshToken: !!workdayConfig.refreshToken,
       });
     } catch (error: any) {
       console.error('[WorkdayConfigController] Error getting config:', error);
@@ -46,10 +29,8 @@ export class WorkdayConfigController {
         return;
       }
 
-      const existingConfig = await this.configRepo.getFirst();
-      
-      const finalClientSecret = clientSecret || existingConfig?.clientSecret;
-      const finalRefreshToken = refreshToken || existingConfig?.refreshToken;
+      const finalClientSecret = clientSecret || workdayConfig.clientSecret;
+      const finalRefreshToken = refreshToken || workdayConfig.refreshToken;
 
       if (!finalClientSecret || !finalRefreshToken) {
         res.status(400).json({
@@ -58,7 +39,7 @@ export class WorkdayConfigController {
         return;
       }
 
-      await this.configRepo.upsert({
+      updateWorkdayConfig({
         tenantName,
         apiEndpoint,
         clientId,
@@ -68,7 +49,7 @@ export class WorkdayConfigController {
 
       res.status(200).json({
         success: true,
-        message: 'Workday configuration credentials successfully saved.',
+        message: 'Workday configuration credentials successfully saved in-memory.',
       });
     } catch (error: any) {
       console.error('[WorkdayConfigController] Error saving config:', error);

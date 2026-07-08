@@ -11,7 +11,7 @@ const server = app.listen(PORT, () => {
   console.log(`=========================================`);
 
   // Start background poller scheduler
-  pollerService.start();
+  // pollerService.start();
 });
 
 // Handle graceful shutdown

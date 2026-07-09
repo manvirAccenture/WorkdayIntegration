@@ -139,7 +139,9 @@ Retrieve full detailed execution log, trace, and AI analysis for a specific even
 ### 2.4. Actions & Relaunches
 
 #### POST `/runs/:runId/relaunch`
-Manually trigger a Workday `Launch_Integration` request for the corresponding integration system (Human-in-the-Loop flow).
+Manually trigger a Workday `Launch_Integration` request for the corresponding integration system.
+* **Body (JSON)**:
+  - `launchParams`: optional array of launch parameter overrides: `[ { "name": string, "value": string } ]`.
 * **Response**: `202 Accepted`
   ```json
   {

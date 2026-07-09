@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import LoadingSpinner from '../components/LoadingSpinner';
+import RelaunchDialog from '../components/RelaunchDialog';
 import { runsApi } from '../api/runs';
 import type { IntegrationRunDetail } from '../api/runs';
 
@@ -25,6 +26,7 @@ const RunDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [relaunchLoading, setRelaunchLoading] = useState(false);
   const [relaunchMessage, setRelaunchMessage] = useState<string | null>(null);
+  const [showRelaunchDialog, setShowRelaunchDialog] = useState(false);
   const [applyFixLoading, setApplyFixLoading] = useState(false);
 
   const fetchRun = async () => {
@@ -46,13 +48,18 @@ const RunDetailPage: React.FC = () => {
     fetchRun();
   }, [runId]);
 
-  const handleRelaunch = async () => {
+  const handleRelaunchClick = () => {
+    setShowRelaunchDialog(true);
+  };
+
+  const handleRelaunchConfirm = async (params: { name: string; value: string }[]) => {
     if (!runId) return;
     setRelaunchLoading(true);
     setRelaunchMessage(null);
     try {
-      const result = await runsApi.relaunch(runId);
+      const result = await runsApi.relaunch(runId, params.length > 0 ? params : undefined);
       setRelaunchMessage(`✓ ${result.message} (New Event: ${result.launchedEventId})`);
+      setShowRelaunchDialog(false);
     } catch (err: any) {
       const backendError = err.response?.data?.error || err.message;
       setRelaunchMessage(`✗ Relaunch failed: ${backendError}`);
@@ -144,7 +151,7 @@ const RunDetailPage: React.FC = () => {
           <div className="page-actions">
             <button
               className="btn btn-success btn-sm"
-              onClick={handleRelaunch}
+              onClick={handleRelaunchClick}
               disabled={relaunchLoading}
             >
               <RotateCcw size={14} />
@@ -282,6 +289,16 @@ const RunDetailPage: React.FC = () => {
             </div>
           </>
         )}
+
+        {/* Relaunch Parameters Dialog */}
+        <RelaunchDialog
+          isOpen={showRelaunchDialog}
+          onClose={() => setShowRelaunchDialog(false)}
+          onConfirm={handleRelaunchConfirm}
+          integrationName={run.integration?.name || 'Unknown Integration'}
+          launchParameters={run.launchParameters || []}
+          isLoading={relaunchLoading}
+        />
       </div>
     </>
   );

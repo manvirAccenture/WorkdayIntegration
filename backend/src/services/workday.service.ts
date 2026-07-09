@@ -221,23 +221,19 @@ export class WorkdayService {
     const isEib = workdaySystemId.toUpperCase().includes('EIB');
     const rootElement = isEib ? 'Launch_EIB_Request' : 'Launch_Integration_Event_Request';
 
-    // Construct Launch parameters XML if present
+    // Construct Launch parameters XML if present (inserted directly, without plural wrapper)
     let launchParamsXml = '';
     if (launchParams && launchParams.length > 0) {
-      launchParamsXml = `
-         <bsvc:Integration_Launch_Parameters_Data>
-            ${launchParams.map(param => `
-            <bsvc:Integration_Launch_Parameter_Data>
-               <bsvc:Integration_Launch_Parameter_Reference>
-                  <bsvc:ID bsvc:type="Integration_Launch_Parameter_ID">${param.name}</bsvc:ID>
-               </bsvc:Integration_Launch_Parameter_Reference>
-               <bsvc:Integration_Launch_Parameter_Value_Data>
-                  <bsvc:Value>${param.value}</bsvc:Value>
-               </bsvc:Integration_Launch_Parameter_Value_Data>
-            </bsvc:Integration_Launch_Parameter_Data>
-            `).join('\n')}
-         </bsvc:Integration_Launch_Parameters_Data>
-      `;
+      launchParamsXml = launchParams.map(param => `
+         <bsvc:Integration_Launch_Parameter_Data>
+            <bsvc:Launch_Parameter_Reference>
+               <bsvc:ID bsvc:parent_id="${workdaySystemId}" bsvc:parent_type="Integration_System_ID" bsvc:type="Launch_Parameter_Name">${param.name}</bsvc:ID>
+            </bsvc:Launch_Parameter_Reference>
+            <bsvc:Launch_Parameter_Value_Data>
+               <bsvc:Text>${param.value}</bsvc:Text>
+            </bsvc:Launch_Parameter_Value_Data>
+         </bsvc:Integration_Launch_Parameter_Data>
+      `).join('\n');
     }
 
     // Construct Launch integration SOAP request for Workday API v47.0
@@ -269,17 +265,11 @@ export class WorkdayService {
         }
       );
 
-      // Parse the resulting background process instance ID (handles both bsvc: and wd: namespaces)
+      // Parse the resulting background process instance ID (handles various namespaces and parent elements)
       const xmlStr = response.data;
-      const match = xmlStr.match(/<[^:]*:Background_Process_Instance_Reference[^>]*>[\s\S]*?<[^:]*:ID [^:]*:type="Background_Process_Instance_ID">([^<]+)<\/[^:]*:ID>/);
+      const match = xmlStr.match(/(?:[a-zA-Z0-9_]+:)?type=["']Background_Process_Instance_ID["'][^>]*?>([^<]+)<\//);
       if (match && match[1]) {
         return match[1];
-      }
-
-      // Fallback regex if namespace prefixes are completely omitted
-      const fallbackMatch = xmlStr.match(/<Background_Process_Instance_Reference[^>]*>[\s\S]*?<ID type="Background_Process_Instance_ID">([^<]+)<\/ID>/);
-      if (fallbackMatch && fallbackMatch[1]) {
-        return fallbackMatch[1];
       }
 
       throw new Error('Could not parse Background_Process_Instance_ID from SOAP response');
@@ -467,11 +457,11 @@ export class WorkdayService {
         for (const pBlock of paramBlocks) {
           const pIdMatch = pBlock.match(/(?:[a-zA-Z0-9_]+:)?type=["']Integration_Launch_Parameter_ID["'][^>]*?>([^<]+)<\//)
             || pBlock.match(/<(?:[a-zA-Z0-9_]+:)?ID [^>]*?>([^<]+)<\//);
-          const valMatch = pBlock.match(/<(?:[a-zA-Z0-9_]+:)?Value>([^<]+)<\//);
-          if (pIdMatch && valMatch) {
+          const valMatch = pBlock.match(/\<(?:[a-zA-Z0-9_]+:)?Value\>([^\<]+)\<\//);
+          if (pIdMatch) {
             launchParameters.push({
               name: pIdMatch[1],
-              value: valMatch[1]
+              value: valMatch ? valMatch[1] : ''
             });
           }
         }
@@ -523,6 +513,86 @@ export class WorkdayService {
         },
       ];
     }
+  }
+
+  async fetchIntegrationSystemLaunchParams(
+    config: WorkdayConfig,
+    workdaySystemId: string
+  ): Promise<{ name: string; value: string }[]> {
+    if (this.isPlaceholder(config)) {
+      throw new Error('Workday credentials are not fully configured.');
+    }
+
+    const accessToken = await this.getAccessToken(config);
+
+    const soapEnvelope = `
+      <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:bsvc="urn:com.workday/bsvc">
+         <soapenv:Header/>
+         <soapenv:Body>
+            <bsvc:Get_Integration_Systems_Request bsvc:version="v43.0">
+               <bsvc:Request_References>
+                  <bsvc:Integration_System_Reference>
+                     <bsvc:ID bsvc:type="Integration_System_ID">${workdaySystemId}</bsvc:ID>
+                  </bsvc:Integration_System_Reference>
+               </bsvc:Request_References>
+            </bsvc:Get_Integration_Systems_Request>
+         </soapenv:Body>
+      </soapenv:Envelope>
+    `;
+
+    try {
+      const soapUrl = this.getSoapUrl(config);
+      console.log(`[WorkdayService] Fetching launch params for system ${workdaySystemId} from: ${soapUrl}`);
+      const response = await axios.post(
+        soapUrl,
+        soapEnvelope,
+        {
+          headers: {
+            'Content-Type': 'text/xml;charset=UTF-8',
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+
+      return this.parseSystemLaunchParams(response.data);
+    } catch (error: any) {
+      console.error('[WorkdayService] Fetch system launch params failed:', error.message);
+      return [];
+    }
+  }
+
+  private parseSystemLaunchParams(xml: string): { name: string; value: string }[] {
+    const params: { name: string; value: string }[] = [];
+
+    // Split on either Custom_Launch_Parameter_Data or Integration_Launch_Parameter_Data
+    const blocks = xml.split(/<(?:[a-zA-Z0-9_]+:)?(?:Custom_Launch_Parameter_Data|Integration_Launch_Parameter_Data)>/);
+    blocks.shift();
+
+    for (const block of blocks) {
+      // 1. Try matching Name element first (used by Custom Launch Parameters)
+      const nameMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Name>([^<]+)<\//);
+      let name = nameMatch ? nameMatch[1] : null;
+
+      // 2. If not found, try matching ID element with type (used by standard Integration Launch Parameters)
+      if (!name) {
+        const idMatch = block.match(/(?:[a-zA-Z0-9_]+:)?type=["']Integration_Launch_Parameter_ID["'][^>]*?>([^<]+)<\//)
+          || block.match(/<(?:[a-zA-Z0-9_]+:)?ID [^>]*?>([^<]+)<\//);
+        if (idMatch) {
+          name = idMatch[1];
+        }
+      }
+
+      // 3. Try matching default value
+      const valMatch = block.match(/<(?:[a-zA-Z0-9_]+:)?Value>([^<]*)</);
+      const value = valMatch ? valMatch[1] : '';
+
+      if (name) {
+        params.push({ name, value });
+      }
+    }
+
+    console.log(`[WorkdayService] Parsed ${params.length} launch parameter(s) from integration system definition.`);
+    return params;
   }
 
   async getRawIntegrationSystems(config: WorkdayConfig): Promise<string> {

@@ -138,6 +138,16 @@ export class IntegrationRunService {
       });
     };
 
+    let launchParameters = event.launchParameters || [];
+    if (launchParameters.length === 0 && event.workdaySystemId) {
+      try {
+        console.log(`[IntegrationRunService] Event ${id} has no launch parameters. Fetching system fallback parameters for: ${event.workdaySystemId}`);
+        launchParameters = await this.workdayService.fetchIntegrationSystemLaunchParams(workdayConfig, event.workdaySystemId);
+      } catch (err: any) {
+        console.error(`[IntegrationRunService] Failed to fetch system parameters: ${err.message}`);
+      }
+    }
+
     const initiatedDateStr = formatDate(event.startedAt);
 
     return {
@@ -152,7 +162,7 @@ export class IntegrationRunService {
       errorsWarnings,
       logs: event.logs || 'No logs attached.',
       aiAnalysis,
-      launchParameters: event.launchParameters || [],
+      launchParameters,
       integrationEvent: `${event.workdaySystemName || event.workdaySystemId || 'Unknown'} - ${initiatedDateStr} (${displayStatus})`,
       integration: {
         id: event.workdaySystemId || 'unknown',

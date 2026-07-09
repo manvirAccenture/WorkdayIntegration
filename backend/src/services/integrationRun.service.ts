@@ -30,6 +30,12 @@ export class IntegrationRunService {
       since
     );
 
+    // Fetch discovered integrations from Workday to map display names to system IDs
+    const discoveredInteg = await this.workdayService.discoverIntegrations(workdayConfig).catch((err) => {
+      console.warn('[IntegrationRunService] Failed to discover integrations for mapping:', err.message);
+      return [];
+    });
+
     // Map Workday Custom Report JSON entries to frontend fields
     let mapped = reportEntries.map((entry) => {
       const statusValue = entry.Status || 'Completed';
@@ -60,9 +66,14 @@ export class IntegrationRunService {
         });
       };
 
+      const foundInteg = discoveredInteg.find(
+        (i) => i.name === entry.Integration_System
+      );
+      const realSystemId = foundInteg ? foundInteg.workdaySystemId : (entry.Integration_System || 'unknown');
+
       return {
         id: entry.EventID || `EVENT_${Date.now()}`,
-        integrationId: entry.Integration_System || 'unknown',
+        integrationId: realSystemId,
         status: displayStatus,
         runBy: entry.Ran_as_System_User || 'System',
         startedAt: entry.Actual_Completed_Date_and_Time || new Date().toISOString(),
@@ -72,11 +83,18 @@ export class IntegrationRunService {
         errorsWarnings: entry.Errors___Warnings || '',
         integrationEvent: entry.Integration_Event || `${entry.Integration_System} - ${entry.EventID}`,
         integration: {
-          id: entry.Integration_System || 'unknown',
-          workdaySystemId: entry.Integration_System || 'unknown',
+          id: realSystemId,
+          workdaySystemId: realSystemId,
           name: entry.Integration_System || 'Unknown Integration',
         },
       };
+    });
+
+    // Filter by interval / date range locally
+    const sinceTime = since.getTime();
+    mapped = mapped.filter((r) => {
+      const runTime = new Date(r.startedAt).getTime();
+      return runTime >= sinceTime;
     });
 
     // Filter by integration if requested

@@ -5,10 +5,9 @@ This document outlines the technical steps to configure, build, and deploy the W
 ---
 
 ## 1. Core Technology Stack
-- **Frontend**: React + Vite + TypeScript, Vanilla CSS (Premium design system)
-- **Backend**: Node.js + Express + TypeScript, Prisma ORM
-- **Database**: PostgreSQL (Neon Serverless Cloud DB)
-- **APIs**: Workday SOAP Integrations Service (v43.0), Gemini API SDK
+- **Backend**: Node.js + Express + TypeScript
+- **Database**: None (Real-time architecture; operates in-memory and queries Workday dynamically)
+- **APIs**: Workday SOAP Integrations Service (v43.0), Workday Custom Reports (RaaS REST JSON), Gemini API SDK
 - **Authentication**: Workday OAuth 2.0 Bearer Refresh Token flow
 
 ---
@@ -16,77 +15,50 @@ This document outlines the technical steps to configure, build, and deploy the W
 ## 2. Workday Integration Workflows
 
 ### 2.1. Poller Engine
-The Node backend executes a cron-like poller based on registered integration settings (10m, 30m, 1h, 1d):
+The Node backend executes real-time queries based on user requests or intervals:
 1. Exchanges the Workday `refresh_token` for a temporary `access_token`.
-2. Construct a SOAP request wrapper for the `Get_Integration_Events` action.
-3. Apply `Transaction_Log_Criteria_Data` to query events that started within the elapsed interval.
-4. Process output results. Match entries against local database records. Insert new events as run records, and extract error logs if statuses are `Failed` or `Completed_With_Errors`.
+2. Fetches integration system definitions and run statuses dynamically using either SOAP or Custom Report JSON endpoints (RaaS).
+3. Polls execution events within requested intervals (10m, 1h, 5h, 1d) on-demand.
+4. Maps Workday SOAP/RaaS properties to the frontend dashboard schema in real-time.
 
 ### 2.2. AI Troubleshooter (Gemini)
 When a run event fails:
-1. Fetch execution logs of the failed event.
+1. Fetch execution logs of the failed event in real-time from Workday.
 2. Anonymize/redact credentials dynamically.
 3. Pass the logs to Gemini API, asking for root-cause description and a formatted Markdown solution.
-4. Write results back to the database.
+4. Return diagnosis results directly to the frontend client.
 
-### 2.3. Relaunch (Human-in-the-Loop & Auto-Launch)
-- **Human-in-the-Loop**: Users see a list of failed integration runs. Clicking **Auto-Launch** fires a backend request to Workday SOAP `Launch_Integration`.
-- **Auto-Launch**: If `autoLaunch` parameter is toggled to `true` on the integration, the system triggers the relaunch SOAP request programmatically when a failure occurs (with dynamic backoffs).
+### 2.3. Relaunch (Human-in-the-Loop & Parameter Dialog)
+- **Human-in-the-Loop Relaunch**: Users can trigger a relaunch directly from the run details view.
+  1. Clicking the **Relaunch** button displays a dialogue box.
+  2. If the event has previous launch parameters or the system has default parameter definitions (fetched via `Get_Integration_Systems_Request`), they are presented in editable fields.
+  3. The user modifies parameters as needed and submits.
+  4. The backend sends a `Launch_Integration` SOAP request containing the launch parameters mapped directly inside the XML payload.
+- **Relaunch API Endpoint**: Mounts a POST route `/api/runs/:runId/relaunch` accepting a `launchParams` array body: `[{ name: string, value: string }]`.
 
 ---
 
-## 3. Database Schema Models (Prisma)
-Refer to the detailed fields in [docs/Database.md](file:///c:/Users/manvir.b.singh/ProjectAccenture/docs/Database.md). Below is the core model config:
-```prisma
-model WorkdayConfig {
-  id           String   @id @default(uuid())
-  tenantName   String
-  clientId     String
-  clientSecret String
-  refreshToken String
-  apiEndpoint  String
-}
-
-model Integration {
-  id              String           @id @default(uuid())
-  workdaySystemId String           @unique
-  name            String
-  isActive        Boolean          @default(true)
-  autoLaunch      Boolean          @default(false)
-  pollingInterval String           @default("10m")
-  runs            IntegrationRun[]
-}
-
-model IntegrationRun {
-  id            String      @id // Background Process Instance ID (Event ID from Workday)
-  integrationId String
-  status        String      // Completed, Completed_With_Errors, Failed
-  runBy         String?
-  startedAt     DateTime
-  completedAt   DateTime?
-  logs          String?
-  errorMessage  String?
-  aiAnalysis    AiAnalysis?
-}
-```
+## 3. Real-Time & Database-less Architecture
+To prevent data sync delays and minimize infrastructure overhead, the system operates completely database-less.
+- **In-Memory Config**: The application manages active Workday credentials (endpoints, tenant, OAuth client keys) in-memory, loaded from backend `.env` variables or updated dynamically via `/api/workday/config`.
+- **On-Demand Queries**: Workday integration definitions and event histories are queried directly from the Workday SOAP and RaaS REST endpoints on page load.
+- **AI Diagnostics on the fly**: Root-cause analysis and suggested fixes are analyzed on-the-fly when a user opens a failed event's detail page, ensuring instant troubleshooting feedback.
 
 ---
 
 ## 4. Execution Roadmaps
 
-### Phase 1: Foundation Documentation (Current Phase - Ready for Setup)
-- Complete specifications for Architecture, Database schemas, API endpoints, and Setup guidelines.
+### Phase 1: Foundation Documentation (Current Phase - Completed)
+- Specifications for Architecture, API endpoints, Setup guidelines, and Relaunch mechanisms.
 
-### Phase 2: Database Setup & Backend Construction
-- Provision a free PostgreSQL instance on Neon.tech.
-- Set up Express app structure. Install packages (`dotenv`, `@prisma/client`, `axios`, `express`, `ts-node`).
-- Write SOAP client module: XML construction and parsing helper scripts.
+### Phase 2: Backend Construction (Completed)
+- Set up Express app structure.
+- Implement SOAP client modules for Get_Integration_Systems, Get_Integration_Events, and Launch_Integration.
+- Implement RaaS REST consumer for real-time dashboard events.
 - Integrate Gemini SDK client.
-- Build event poller background schedulers.
 
-### Phase 3: Frontend Construction
+### Phase 3: Frontend Dashboard Development (Completed)
 - Scaffold React + Vite application.
-- Build clean layout using custom Vanilla CSS (dark/glassmorphic dashboards, charts, expandable details).
-- Implement status view list and Event monitoring timelines.
-- Add AI remediation display drawer.
-- Implement relaunch trigger controls.
+- Build dark/glassmorphic layouts with custom Vanilla CSS.
+- Implement real-time status listings, detail panels, AI remediation drawer, and the relaunch parameters dialogue box.
+

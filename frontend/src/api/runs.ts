@@ -40,10 +40,10 @@ export interface RelaunchResult {
 
 export const runsApi = {
   list: async (filters?: { status?: string; integrationId?: string; interval?: string }): Promise<IntegrationRunSummary[]> => {
-    const params = new URLSearchParams();
-    if (filters?.status) params.set('status', filters.status);
-    if (filters?.integrationId) params.set('integrationId', filters.integrationId);
-    if (filters?.interval) params.set('interval', filters.interval);
+    const params: any = {};
+    if (filters?.status) params.status = filters.status;
+    if (filters?.integrationId) params.integrationId = filters.integrationId;
+    if (filters?.interval) params.interval = filters.interval;
     const { data } = await apiClient.get('/runs', { params });
     return data;
   },

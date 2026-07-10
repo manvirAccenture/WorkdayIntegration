@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Layers,
@@ -12,8 +12,6 @@ import {
 import StatsCard from '../components/StatsCard';
 import StatusBadge from '../components/StatusBadge';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { integrationsApi } from '../api/integrations';
-import type { Integration } from '../api/integrations';
 import { runsApi } from '../api/runs';
 import type { IntegrationRunSummary } from '../api/runs';
 import Modal from '../components/Modal';
@@ -27,9 +25,9 @@ const INTERVALS = [
 
 const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [runs, setRuns] = useState<IntegrationRunSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedInterval, setSelectedInterval] = useState('1d');
@@ -42,20 +40,13 @@ const DashboardPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [intData, runData] = await Promise.all([
-        integrationsApi.list().catch((err) => {
-          console.warn('Failed to fetch integrations:', err);
+      const runData = await runsApi.list({ interval: intervalVal }).catch((err) => {
+        const backendError = err.response?.data?.error || err.message;
+        if (backendError?.includes('No integration runs') || backendError?.includes('SOAP Get_Integration_Events')) {
           return [];
-        }),
-        runsApi.list({ interval: intervalVal }).catch((err) => {
-          const backendError = err.response?.data?.error || err.message;
-          if (backendError?.includes('No integration runs') || backendError?.includes('SOAP Get_Integration_Events')) {
-            return [];
-          }
-          throw err;
-        }),
-      ]);
-      setIntegrations(intData);
+        }
+        throw err;
+      });
       setRuns(runData);
     } catch (err: any) {
       console.error('[Dashboard] Fetch error:', err);
@@ -66,9 +57,10 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  useEffect(() => {
+  const handleGetIntegrations = () => {
+    setHasLoaded(true);
     fetchData(selectedInterval);
-  }, [selectedInterval]);
+  };
 
   const handleIntervalChange = (value: string) => {
     setSelectedInterval(value);
@@ -129,8 +121,19 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  const totalIntegrations = integrations.length;
-  const activeIntegrations = integrations.filter((i) => i.isActive).length;
+  const uniqueIntegIds = Array.from(new Set(runs.map((r) => r.integration?.id || r.integrationId).filter(Boolean)));
+  const totalIntegrations = uniqueIntegIds.length;
+  
+  const activeIntegIds = Array.from(
+    new Set(
+      runs
+        .filter((r) => r.status === 'Completed')
+        .map((r) => r.integration?.id || r.integrationId)
+        .filter(Boolean)
+    )
+  );
+  const activeIntegrations = activeIntegIds.length;
+
   const failedRuns = runs.filter(
     (r) => r.status === 'Failed' || r.status === 'Completed with Warnings'
   ).length;
@@ -168,10 +171,16 @@ const DashboardPage: React.FC = () => {
             ))}
           </div>
 
-          <button className="btn btn-ghost btn-sm" onClick={() => fetchData()}>
-            <RefreshCw size={14} />
-            Refresh
+          <button className="btn btn-primary btn-sm" onClick={handleGetIntegrations} disabled={loading}>
+            Get Integrations
           </button>
+
+          {hasLoaded && (
+            <button className="btn btn-ghost btn-sm" onClick={() => fetchData()} disabled={loading}>
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          )}
         </div>
       </div>
 
@@ -225,7 +234,20 @@ const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {loading ? (
+        {!hasLoaded ? (
+          <div className="glass-card" style={{ textAlign: 'center', padding: '60px 40px' }}>
+            <Layers size={48} style={{ color: 'var(--accent-blue)', marginBottom: '16px', opacity: 0.8 }} />
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Retrieve Workday Integration Runs
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto 24px', fontSize: '0.9rem', lineHeight: '1.5' }}>
+              Select a time period using the selectors above, then click <strong>Get Integrations</strong> to fetch real-time run data directly from your Workday RaaS report.
+            </p>
+            <button className="btn btn-primary" onClick={handleGetIntegrations} style={{ minWidth: '180px' }}>
+              Get Integrations
+            </button>
+          </div>
+        ) : loading ? (
           <LoadingSpinner text="Fetching real-time data from Workday..." />
         ) : error ? (
           <div className="glass-card" style={{ textAlign: 'center', padding: '40px' }}>
@@ -260,7 +282,15 @@ const DashboardPage: React.FC = () => {
                     onClick={() => navigate(`/runs/${run.id}`)}
                     title="Click to view run details & AI analysis"
                   >
-                    <td className="table-cell-name" style={{ fontWeight: 600 }}>
+                    <td
+                      className="table-cell-name"
+                      style={{ fontWeight: 600, color: 'var(--accent-blue)', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/integrations/${run.integrationId}`);
+                      }}
+                      title={`Click to view details for ${run.integration?.name}`}
+                    >
                       {run.integration?.name || '—'}
                     </td>
                     <td className="table-cell-mono">{run.id}</td>

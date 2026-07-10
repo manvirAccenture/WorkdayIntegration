@@ -2,16 +2,12 @@ import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Layers,
-  Activity,
   Settings,
   Zap,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/integrations', icon: Layers, label: 'Integrations' },
-  { to: '/runs', icon: Activity, label: 'Run Events' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 

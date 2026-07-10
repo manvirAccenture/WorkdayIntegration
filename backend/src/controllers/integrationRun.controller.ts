@@ -8,8 +8,9 @@ export class IntegrationRunController {
     try {
       const status = req.query.status as string | undefined;
       const integrationId = req.query.integrationId as string | undefined;
+      const interval = req.query.interval as string | undefined;
 
-      const runs = await this.runService.listAll({ status, integrationId });
+      const runs = await this.runService.listAll({ status, integrationId, interval });
       res.status(200).json(runs);
     } catch (error: any) {
       console.error('[IntegrationRunController] Error listing runs:', error);

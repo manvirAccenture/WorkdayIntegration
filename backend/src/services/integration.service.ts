@@ -25,7 +25,7 @@ export class IntegrationService {
 
   async getById(id: string): Promise<any | null> {
     const integrations = await this.listAll();
-    return integrations.find((i) => i.id === id) || null;
+    return integrations.find((i) => i.id === id || i.name === id) || null;
   }
 
   async register(data: {

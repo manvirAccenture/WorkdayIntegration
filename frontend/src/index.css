@@ -234,6 +234,8 @@ a:hover {
   margin-left: var(--sidebar-width);
   min-height: 100vh;
   transition: margin-left var(--transition-default);
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .page-header {
@@ -500,10 +502,31 @@ a:hover {
   border: 1px solid var(--glass-border);
   background: var(--bg-card);
   backdrop-filter: blur(var(--glass-blur));
+  width: 100%;
+}
+
+/* Custom scrollbar for data tables to match the premium theme */
+.data-table-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.data-table-wrapper::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.data-table-wrapper::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-full);
+}
+
+.data-table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .data-table {
   width: 100%;
+  min-width: 1100px;
   border-collapse: collapse;
   font-size: 0.85rem;
 }
